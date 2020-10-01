@@ -45,6 +45,8 @@ def load(context, path, callback):
     else:
         # First attempt to load with file_loader
         file_loader.load(context, path, callback)
+        return
+
 
     # If we got here, there was a failure
     result = LoaderResult()
