@@ -20,7 +20,7 @@ This allows Thumbor to create thumbnails from pdf files.
 
 ```
 # Use the custom file loader
-LOADER = 'tc_multiple_loader.loaders.multiple_loader'
+LOADER = 'tc_multiple_loader.loaders.file_loader'
 # Full path to ffmpeg
 FFMPEG_PATH = '/usr/bin/ffmpeg'
 ```
