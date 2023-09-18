@@ -8,51 +8,96 @@
 # http://www.opensource.org/licenses/mit-license
 # Copyright (c) 2011 globo.com timehome@corp.globo.com
 
-from thumbor.loaders import file_loader
+#from thumbor.loaders import file_loader
 from thumbor.loaders import LoaderResult
 from thumbor.utils import logger
 from datetime import datetime
 from os import fstat
 from os.path import join, exists, abspath
-from urllib import unquote
-from tornado.concurrent import return_future
+from urllib.parse import unquote
 from contextlib import contextmanager
 
-
-@return_future
-def load(context, path, callback):
+async def load(context, path):
     file_path = join(context.config.FILE_LOADER_ROOT_PATH.rstrip(
         '/'), unquote(path).lstrip('/'))
     file_path = abspath(file_path)
 
     inside_root_path = file_path.startswith(
         context.config.FILE_LOADER_ROOT_PATH)
+    
+    result = LoaderResult()
+
+    if not exists(file_path):
+        file_path = unquote(file_path)
 
     if inside_root_path and is_video(file_path):
         # Extract a frame from the video and load it instead of the original path
         logger.warning('processing video... %s', file_path)
         with get_video_frame(context, file_path) as image_path:
             if image_path:
-                callback(read_file(image_path))
-                return
+                with open(image_path, "rb") as source_file:
+                    stats = fstat(source_file.fileno())
+
+                    result.successful = True
+                    result.buffer = source_file.read()
+
+                    result.metadata.update(
+                        size=stats.st_size,
+                        updated_at=datetime.utcfromtimestamp(stats.st_mtime),
+                    )
+                return result
     elif inside_root_path and is_pdf(file_path):
         # extract first page of pdf and load it
         logger.warning('processing pdf... %s', file_path)
         with get_pdf_page(context, file_path) as image_path:
             if image_path:
-                callback(read_file(image_path))
-                return
+                with open(image_path, "rb") as source_file:
+                    stats = fstat(source_file.fileno())
+
+                    result.successful = True
+                    result.buffer = source_file.read()
+
+                    result.metadata.update(
+                        size=stats.st_size,
+                        updated_at=datetime.utcfromtimestamp(stats.st_mtime),
+                    )
+                return result
+    elif inside_root_path and is_svg(file_path):
+        logger.warning('processing svg... %s', file_path)
+        
+        with open(file_path, "rb") as source_file:
+            stats = fstat(source_file.fileno())
+
+            result.successful = True
+            result.buffer = source_file.read()
+
+            result.metadata.update(
+                size=stats.st_size,
+                updated_at=datetime.utcfromtimestamp(stats.st_mtime),
+            )
+        return result
     else:
         # First attempt to load with file_loader
-        file_loader.load(context, path, callback)
-        return
+        logger.warning('processing image... %s', file_path)
+
+        with open(file_path, "rb") as source_file:
+                stats = fstat(source_file.fileno())
+
+                result.successful = True
+                result.buffer = source_file.read()
+
+                result.metadata.update(
+                    size=stats.st_size,
+                    updated_at=datetime.utcfromtimestamp(stats.st_mtime),
+                )
+        return result
 
 
     # If we got here, there was a failure
     result = LoaderResult()
     result.error = LoaderResult.ERROR_NOT_FOUND
     result.successful = False
-    callback(result)
+    return result
 
 
 def is_video(file_path):
@@ -71,6 +116,14 @@ def is_pdf(file_path):
     import mimetypes
     type = mimetypes.guess_type(file_path)[0]
     return type and type == 'application/pdf'
+
+def is_svg(file_path):
+    """
+    Checks whether the file is an svg.
+    """
+    import mimetypes
+    type = mimetypes.guess_type(file_path)[0]
+    return type and type == 'image/svg+xml'
 
 
 @contextmanager
@@ -137,6 +190,7 @@ def get_pdf_page(context, file_path):
     # Prepare temporary file
     f, image_path = tempfile.mkstemp('.jpg')
     os.close(f)
+    logger.warning('creating temporary file... %s', image_path)
     # Extract image
     try:
         cmd = [
@@ -151,7 +205,7 @@ def get_pdf_page(context, file_path):
             '-dJPEGQ=85',
             '-r120x120',
             '-dNOPAUSE',
-            '-sOutputFile="'+image_path+'"',
+            '-sOutputFile='+image_path,
             file_path
         ]
         subprocess.check_call(cmd)
@@ -162,7 +216,6 @@ def get_pdf_page(context, file_path):
     finally:
         # Cleanup
         try_to_delete(image_path)
-
 
 def read_file(file_path):
     """
@@ -182,6 +235,7 @@ def try_to_delete(file_path):
     """
     Delete the given file path but do not raise any exception.
     """
+    import os
     try:
         os.remove(file_path)
     except:
