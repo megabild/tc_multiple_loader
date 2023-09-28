@@ -8,7 +8,6 @@
 # http://www.opensource.org/licenses/mit-license
 # Copyright (c) 2011 globo.com timehome@corp.globo.com
 
-#from thumbor.loaders import file_loader
 from thumbor.loaders import LoaderResult
 from thumbor.utils import logger
 from datetime import datetime
@@ -30,12 +29,42 @@ async def load(context, path):
     if not exists(file_path):
         file_path = unquote(file_path)
 
-    if inside_root_path and is_video(file_path):
-        # Extract a frame from the video and load it instead of the original path
-        logger.warning('processing video... %s', file_path)
-        with get_video_frame(context, file_path) as image_path:
-            if image_path:
-                with open(image_path, "rb") as source_file:
+    if inside_root_path:
+        if is_video(file_path):
+            # Extract a frame from the video and load it instead of the original path
+            logger.info('processing video... %s', file_path)
+            with get_video_frame(context, file_path) as image_path:
+                if image_path:
+                    with open(image_path, "rb") as source_file:
+                        stats = fstat(source_file.fileno())
+
+                        result.successful = True
+                        result.buffer = source_file.read()
+
+                        result.metadata.update(
+                            size=stats.st_size,
+                            updated_at=datetime.utcfromtimestamp(stats.st_mtime),
+                        )
+                    return result
+        elif is_pdf(file_path):
+            # Extract first page of pdf and load it
+            logger.info('processing pdf... %s', file_path)
+            with get_pdf_page(file_path) as image_path:
+                if image_path:
+                    with open(image_path, "rb") as source_file:
+                        stats = fstat(source_file.fileno())
+
+                        result.successful = True
+                        result.buffer = source_file.read()
+
+                        result.metadata.update(
+                            size=stats.st_size,
+                            updated_at=datetime.utcfromtimestamp(stats.st_mtime),
+                        )
+                    return result
+        else:
+            logger.info('processing image... %s', file_path)
+            with open(file_path, "rb") as source_file:
                     stats = fstat(source_file.fileno())
 
                     result.successful = True
@@ -45,52 +74,7 @@ async def load(context, path):
                         size=stats.st_size,
                         updated_at=datetime.utcfromtimestamp(stats.st_mtime),
                     )
-                return result
-    elif inside_root_path and is_pdf(file_path):
-        # extract first page of pdf and load it
-        logger.warning('processing pdf... %s', file_path)
-        with get_pdf_page(context, file_path) as image_path:
-            if image_path:
-                with open(image_path, "rb") as source_file:
-                    stats = fstat(source_file.fileno())
-
-                    result.successful = True
-                    result.buffer = source_file.read()
-
-                    result.metadata.update(
-                        size=stats.st_size,
-                        updated_at=datetime.utcfromtimestamp(stats.st_mtime),
-                    )
-                return result
-    elif inside_root_path and is_svg(file_path):
-        logger.warning('processing svg... %s', file_path)
-        
-        with open(file_path, "rb") as source_file:
-            stats = fstat(source_file.fileno())
-
-            result.successful = True
-            result.buffer = source_file.read()
-
-            result.metadata.update(
-                size=stats.st_size,
-                updated_at=datetime.utcfromtimestamp(stats.st_mtime),
-            )
-        return result
-    else:
-        # First attempt to load with file_loader
-        logger.warning('processing image... %s', file_path)
-
-        with open(file_path, "rb") as source_file:
-                stats = fstat(source_file.fileno())
-
-                result.successful = True
-                result.buffer = source_file.read()
-
-                result.metadata.update(
-                    size=stats.st_size,
-                    updated_at=datetime.utcfromtimestamp(stats.st_mtime),
-                )
-        return result
+            return result
 
 
     # If we got here, there was a failure
@@ -101,29 +85,15 @@ async def load(context, path):
 
 
 def is_video(file_path):
-    """
-    Checks whether the file is a video.
-    """
     import mimetypes
     type = mimetypes.guess_type(file_path)[0]
     return type and type.startswith('video')
 
 
 def is_pdf(file_path):
-    """
-    Checks whether the file is a pdf.
-    """
     import mimetypes
     type = mimetypes.guess_type(file_path)[0]
     return type and type == 'application/pdf'
-
-def is_svg(file_path):
-    """
-    Checks whether the file is an svg.
-    """
-    import mimetypes
-    type = mimetypes.guess_type(file_path)[0]
-    return type and type == 'image/svg+xml'
 
 
 @contextmanager
@@ -169,7 +139,7 @@ def get_video_frame(context, file_path):
 
 
 @contextmanager
-def get_pdf_page(context, file_path):
+def get_pdf_page(file_path):
     """
     A context manager that extracts a single page out of a pdf file and 
     stores it in a temporary file. Returns the path of the temporary file
@@ -190,7 +160,7 @@ def get_pdf_page(context, file_path):
     # Prepare temporary file
     f, image_path = tempfile.mkstemp('.jpg')
     os.close(f)
-    logger.warning('creating temporary file... %s', image_path)
+    logger.info('creating temporary file... %s', image_path)
     # Extract image
     try:
         cmd = [
@@ -216,19 +186,6 @@ def get_pdf_page(context, file_path):
     finally:
         # Cleanup
         try_to_delete(image_path)
-
-def read_file(file_path):
-    """
-    Read the given file path and its metadata. Returns a LoaderResult.
-    """
-    with open(file_path, 'r') as f:
-        stats = fstat(f.fileno())
-        return LoaderResult(
-            buffer=f.read(),
-            successful=True,
-            metadata=dict(size=stats.st_size,
-                          updated_at=datetime.utcfromtimestamp(stats.st_mtime))
-        )
 
 
 def try_to_delete(file_path):
